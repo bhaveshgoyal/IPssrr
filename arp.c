@@ -2,6 +2,7 @@
 #include "unp.h"
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
+#include <linux/if_arp.h>
 #include <netinet/ip.h>
 #define ETH_HDRLEN 14      // Ethernet header length
 #define IP4_HDRLEN 20      // IPv4 header length
@@ -24,8 +25,6 @@ int lookup_loifaces(char *lo_ip, uint8_t *lo_mac){
 	int    i, prflag;
 
 	printf("\n");
-	FILE* fp;
-	fp = fopen("bagl.log", "w+");
 
 	for (hwahead = hwa = Get_hw_addrs(); hwa != NULL; hwa = hwa->hwa_next) {
 
@@ -60,12 +59,7 @@ int lookup_loifaces(char *lo_ip, uint8_t *lo_mac){
 					}
 					printf("%s", hw_addr);
 
-					char log_str[100];
-					sprintf(log_str, "<%s, %s>", Sock_ntop_host(sa, sizeof(*sa)), hw_addr);
-
-					fprintf(fp, "%s", log_str);
 					printf("\n         interface index = %d\n\n", hwa->if_index);
-					fclose(fp);
 					free_hwa_info(hwahead);
 					return hwa->if_index;
 			}
@@ -76,18 +70,20 @@ int lookup_loifaces(char *lo_ip, uint8_t *lo_mac){
 int send_response(uint8_t *ethr_frame, arp_hdr *arpheader)
 {
   int i, status, frame_length, sd, bytes;
-  char *interface, *target, *src_ip;
+  char *interface, *query, *src_ip, *sender_ip;
   arp_hdr arphdr;
-  uint8_t *src_mac, *dst_mac, *ether_frame;
+  uint8_t *src_mac, *sender_mac,  *dst_mac, *ether_frame;
 //  struct addrinfo hints, *res;
   struct sockaddr_in *ipv4;
   struct sockaddr_ll device;
 
 	
   src_mac = allocate_ustrmem (6);
+  sender_mac = allocate_ustrmem (6);
   dst_mac = allocate_ustrmem (6);
   ether_frame = allocate_ustrmem (IP_MAXPACKET);
-  target = allocate_strmem (40);
+  query = allocate_strmem (40);
+  sender_ip = allocate_strmem (40);
   src_ip = allocate_strmem (INET_ADDRSTRLEN);
 //  lookup_loifaces(src_ip, src_mac);
 
@@ -99,36 +95,65 @@ int send_response(uint8_t *ethr_frame, arp_hdr *arpheader)
 	}
 
 
-  memcpy(dst_mac, ethr_frame, 6 * sizeof (uint8_t));
-  memcpy(target, arpheader->sender_ip, 4*sizeof(uint8_t));
+    memcpy(dst_mac, ethr_frame, 6 * sizeof (uint8_t));
+    memcpy(query, arpheader->target_ip, 4*sizeof(uint8_t));
+    sprintf(query, "%u.%u.%u.%u", arpheader->target_ip[0], arpheader->target_ip[1], arpheader->target_ip[2], arpheader->target_ip[3]);
+    sprintf(sender_ip, "%u.%u.%u.%u", arpheader->sender_ip[0], arpheader->sender_ip[1], arpheader->sender_ip[2], arpheader->sender_ip[3]);
+    if (strcmp(query, src_ip) != 0){
+        printf("None of my business\n");
+        free(src_mac);
+        free(dst_mac) ;
+        free(ether_frame);
+        free(query);
+        free(src_ip);
+        free(sender_ip);
+        free(sender_mac);
+        return -1;
+    }
 
+    //  memset (&hints, 0, sizeof (struct addrinfo));
 
-//  memset (&hints, 0, sizeof (struct addrinfo));
-  
 //  hints.ai_family = AF_INET;
 //  hints.ai_socktype = SOCK_STREAM;
 //  hints.ai_flags = hints.ai_flags | AI_CANONNAME;
 
-  if ((status = inet_pton (AF_INET, src_ip, &arphdr.sender_ip)) != 1) {
-    fprintf (stderr, "inet_pton() failed for source IP address.\nError message: %s", strerror (status));
-    exit (EXIT_FAILURE);
+    if ((status = inet_pton (AF_INET, src_ip, &arphdr.sender_ip)) != 1) {
+      fprintf (stderr, "inet_pton() failed for source IP address.\nError message: %s", strerror (status));
+      exit (EXIT_FAILURE);
   }
-
-  // Resolve target using getaddrinfo().
-//  if ((status = getaddrinfo (target, NULL, &hints, &res)) != 0) {
-//    fprintf (stderr, "getaddrinfo() failed: %s\n", gai_strerror (status));
-//    exit (EXIT_FAILURE);
-//  }
-//  ipv4 = (struct sockaddr_in *) res->ai_addr;
+  
   memcpy (&arphdr.target_ip, arpheader->sender_ip, 4 * sizeof (uint8_t));
-//  freeaddrinfo (res);
-
-  // Fill out sockaddr_ll.
   device.sll_family = AF_PACKET;
   memcpy (device.sll_addr, src_mac, 6 * sizeof (uint8_t));
   device.sll_halen = 6;
+  device.sll_hatype = ARPHRD_ETHER;
+    
+    FILE * fp, *fp_out;
+    char * line = NULL;
+    char line_found[100] = {0};
+    size_t len = 0;
+    ssize_t read;
+    fp = fopen("bagl.log", "r");
+    fp_out = fopen("bagl.log.2", "w+");
 
-  // ARP header
+    while ((read = getline(&line, &len, fp)) != -1) {
+        if (strstr(line, sender_ip) != NULL){
+            strcpy(line_found, line);
+            printf("Cache entry found: %s\n", line);
+        }
+        else {
+            fprintf(fp_out, "%s", line);
+        }
+    }
+    sprintf(sender_mac, "%02x:%02x:%02x:%02x:%02x:%02x", arpheader->sender_mac[0],arpheader->sender_mac[1],arpheader->sender_mac[2],arpheader->sender_mac[3],arpheader->sender_mac[4],arpheader->sender_mac[5]); 
+    char log_str[100];
+    sprintf(log_str, "<%s, %s, %d, %d>", sender_ip, sender_mac, device.sll_ifindex, device.sll_hatype);
+    fprintf(fp_out, "%s", log_str);
+    fclose(fp);
+    fclose(fp_out);
+
+    rename("bagl.log.2", "bagl.log");
+    
 
   // Hardware type (16 bits): 1 for ethernet
   arphdr.htype = htons (1);
@@ -184,9 +209,33 @@ int send_response(uint8_t *ethr_frame, arp_hdr *arpheader)
 
   // Send ethernet frame to socket.
   if ((bytes = sendto (sd, ether_frame, frame_length, 0, (struct sockaddr *) &device, sizeof (device))) <= 0) {
-    perror ("sendto() failed");
-    exit (EXIT_FAILURE);
+      perror ("sendto() failed");
+      exit (EXIT_FAILURE);
   }
+
+  printf ("\nEthernet Response frame header:\n");
+  printf ("Destination MAC: ");
+  for (i=0; i<5; i++) {
+      printf ("%02x:", ether_frame[i]);
+  }
+  printf ("%02x\n", ether_frame[5]);
+  printf ("Source MAC: ");
+  for (i=0; i<5; i++) {
+      printf ("%02x:", ether_frame[i+6]);
+  }
+  printf ("%02x\n", ether_frame[11]);
+  printf ("ARP, Reply ");
+  printf ("%u.%u.%u.%u (",
+          arpheader->target_ip[0], arpheader->target_ip[1], arpheader->target_ip[2], arpheader->target_ip[3]);
+  for (i=0; i<5; i++) {
+      printf ("%02x:", arpheader->target_mac[i]);
+  }
+  printf ("%02x) ", arpheader->target_mac[5]);
+  printf ("is-at %s (", src_ip);
+  for (i=0; i<5; i++) {
+      printf ("%02x:", src_mac[i]);
+  }
+  printf ("%02x)\n", src_mac[5]);
 
   // Close socket descriptor.
   close (sd);
@@ -195,9 +244,10 @@ int send_response(uint8_t *ethr_frame, arp_hdr *arpheader)
   free (src_mac);
   free (dst_mac);
   free (ether_frame);
-  free (target);
+  free (query);
   free (src_ip);
-
+  free(sender_ip);
+  free(sender_mac);
   return (EXIT_SUCCESS);
 }
 int main(int arc, char **argv){
@@ -222,21 +272,47 @@ int main(int arc, char **argv){
   // Keep at it until we get an ARP reply.
   arphdr = (arp_hdr *) (ether_frame + 6 + 6 + 2);
 //  while (((((ether_frame[12]) << 8) + ether_frame[13]) != ETH_P_ARP) || (ntohs (arphdr->opcode) != ARPOP_REQUEST)) {
-    while(1){
-    if ((status = recv(sd, ether_frame, IP_MAXPACKET, 0)) < 0) {
-      if (errno == EINTR) {
-        memset (ether_frame, 0, IP_MAXPACKET * sizeof (uint8_t));
-        continue;  // Something weird happened, but let's try again.
-      } else {
-        perror ("recv() failed:");
-        exit (EXIT_FAILURE);
+  while(1){
+      if ((status = recv(sd, ether_frame, IP_MAXPACKET, 0)) < 0) {
+          if (errno == EINTR) {
+              memset (ether_frame, 0, IP_MAXPACKET * sizeof (uint8_t));
+              continue;  // Something weird happened, but let's try again.
+          } else {
+              perror ("recv() failed:");
+              exit (EXIT_FAILURE);
+          }
       }
-    }
-    else{
-        if (ntohs(arphdr->opcode) == ARPOP_REQUEST){
-            fprintf(stdout, "REQUEST RECEIVED");
-            send_response(ether_frame, arphdr);
-            fflush(stdout);
+      else{
+          if (ntohs(arphdr->opcode) == ARPOP_REQUEST){
+
+              printf ("\nEthernet Request frame header:\n");
+              printf ("Destination MAC: ");
+              for (i=0; i<5; i++) {
+                  printf ("%02x:", ether_frame[i]);
+              }
+              printf ("%02x\n", ether_frame[5]);
+              printf ("Source MAC: ");
+              for (i=0; i<5; i++) {
+                  printf ("%02x:", ether_frame[i+6]);
+              }
+              printf ("%02x\n", ether_frame[11]);
+              printf ("ARP, Request who-has ");
+              printf ("%u.%u.%u.%u (",
+                      arphdr->target_ip[0], arphdr->target_ip[1], arphdr->target_ip[2], arphdr->target_ip[3]);
+              for (i=0; i<5; i++) {
+                  printf ("%02x:", arphdr->target_mac[i]);
+              }
+              printf ("%02x) ", arphdr->target_mac[5]);
+              printf ("tell: %u.%u.%u.%u (",
+                      arphdr->sender_ip[0], arphdr->sender_ip[1], arphdr->sender_ip[2], arphdr->sender_ip[3]);
+
+              for (i=0; i<5; i++) {
+                  printf ("%02x:", arphdr->sender_mac[i]);
+              }
+              printf ("%02x)\n", arphdr->sender_mac[5]);
+
+              send_response(ether_frame, arphdr);
+              fflush(stdout);
         }
 
 
