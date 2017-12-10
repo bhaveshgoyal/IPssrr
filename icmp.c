@@ -183,12 +183,11 @@ void send_rt(){
 
     Sendto(sockfd, packet, packet_size, 0, (struct sockaddr*) &servaddr, sizeof (servaddr));
 
-    recv_rt();
+  //  send_icmpp();
 
 }
 void recv_rt(){
     
-
     int recvfd = Socket(AF_INET, SOCK_RAW, pid);
     char            recvbuf[BUFSIZE];
     ssize_t         n;
@@ -198,10 +197,26 @@ void recv_rt(){
     int size = 60 * 1024;
     setsockopt(recvfd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
 
+    fd_set readfs;
+    FD_SET(recvfd, &readfs);
+    int maxfd = -1;
+
     while(1){
-        Recvfrom(recvfd, recvbuf, sizeof(recvbuf),0, &servaddr, (socklen_t *)&saddr_len);
-            fprintf(stdout, "%s", recvbuf+sizeof(struct iphdr));
+        FD_ZERO(&readfs);
+
+        FD_SET(recvfd, &readfs);
+        maxfd = recvfd;
+
+        int status = select(maxfd+1, &readfs, NULL, NULL, NULL);
+
+        if (status < 0)
+            perror("Could not perform Socket Multiplexing\n");
+
+        if (FD_ISSET(recvfd, &readfs)){
+            Recvfrom(recvfd, recvbuf, sizeof(recvbuf),0, &servaddr, (socklen_t *)&saddr_len);
+            fprintf(stdout, "Tour received %s\n", recvbuf+sizeof(struct iphdr));
             process_rt((char *)(recvbuf+sizeof(struct iphdr)));
+        }
     }
 
 
@@ -217,7 +232,7 @@ void process_rt(char *recvbuf){
     char *rem = strtok(NULL, "\n");
     
     if (!rem){
-        fprintf(stderr, "tour end");
+        fprintf(stderr, "End of Tour\n");
         // BroadCase Now;
     }
     
@@ -230,7 +245,7 @@ void process_rt(char *recvbuf){
     char *nn_ip = Sock_ntop_host(ai->ai_addr, ai->ai_addrlen);
     strcpy(nexthop_ip, nn_ip);
 
-    printf("PING %s (%s): %d data bytes\n",
+    printf("Next Hop %s (%s): %d data bytes\n",
             ai->ai_canonname ? ai->ai_canonname : nn,
             nn_ip, datalen);
     rt_proto->sasend = ai->ai_addr;
@@ -257,7 +272,7 @@ int main(int argc, char **argv){
         ai = Host_serv(host, NULL, 0, 0);
         h = Sock_ntop_host(ai->ai_addr, ai->ai_addrlen);
         strcpy(nexthop_ip, h);
-        printf("PING %s (%s): %d data bytes\n",
+        printf("Next Hop %s (%s): %d data bytes\n",
                 ai->ai_canonname ? ai->ai_canonname : h,
                 h, datalen);
         rt_proto->sasend = ai->ai_addr;
