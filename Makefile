@@ -20,6 +20,9 @@ arp_recv:
 arp_resp:
 	${CC} ${CFLAGS} arp_resp.c get_hw_addrs.c ${LIBS} -o arp_resp
 
+icmp:
+	${CC} ${CFLAGS} icmp.c ifaces.c icmputils.c get_hw_addrs.c ${LIBS} -o icmp
+
 clean:
 	rm arp arp_recv arp_resp
 

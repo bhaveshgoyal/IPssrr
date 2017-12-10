@@ -47,3 +47,10 @@ struct _arp_hdr {
 		uint8_t target_mac[6];
 		uint8_t target_ip[4];
 };
+
+typedef struct proto {
+    struct sockaddr  *sasend;   /* sockaddr{} for send, from getaddrinfo */
+    struct sockaddr  *sarecv; /* sockaddr{} for receiving */
+    socklen_t       salen;      /* length of sockaddr{}s */
+    int           proto_val;  /* IPPROTO_xxx value for ICMP */
+} proto;
