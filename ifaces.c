@@ -1,20 +1,27 @@
 #include "unp.h"
 #include "hw_addrs.h"
 
-char *P_IP = "172.24.28.162";
+char *P_IPsub = "130.245.156.2";
+char P_IP[20] = {0};
+int lookup_loifaces(char *lo_ip, uint8_t *lo_mac, char *host){
 
-int lookup_loifaces(char *lo_ip, uint8_t *lo_mac){
+	// Should always be like vmX
+	char host_num = ((host[2] - '0') % 10) + '0';
 
+	strcat(P_IP, P_IPsub);
+	strcat(P_IP, (char*)&host_num);
+	P_IP[14] = '\0';
 	struct hwa_info	*hwa, *hwahead;
 	struct sockaddr	*sa;
 	char   *ptr;
 	int    i, prflag;
 
-	printf("\n");
+	printf("Host Machine IP: %s\n", P_IP);
 
 	for (hwahead = hwa = Get_hw_addrs(); hwa != NULL; hwa = hwa->hwa_next) {
+			struct sockaddr *hwi = hwa->ip_addr;
 
-			if ( (sa = hwa->ip_addr) != NULL && strstr(Sock_ntop_host(sa, sizeof(*sa)), P_IP) != NULL){
+			if ( (sa = hwa->ip_addr) != NULL && strcmp(Sock_ntop_host(sa, sizeof(*sa)), P_IP) == 0){
 					printf("%s :%s", hwa->if_name, ((hwa->ip_alias) == IP_ALIAS) ? " (alias)\n" : "\n");
 					
 					printf("         IP addr = %s\n", Sock_ntop_host(sa, sizeof(*sa)));

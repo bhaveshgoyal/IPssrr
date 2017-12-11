@@ -9,150 +9,54 @@
 #define ARP_HDRLEN 28      // ARP header length
 #define ARPOP_REQUEST 1    // Taken from <linux/if_arp.h>
 #define ARPOP_RESPONSE 2   // Taken from <linux/if_arp.h>
-
+#define ARP_PID 6157
 //char *P_IP = "130.245.156.1";
-char *P_IP = "172.24.28.162";
 char iface[10];
-
+char lo_ip[50];
+uint8_t src_mac[6];
+int ifidx = -1;
 char *allocate_strmem (int);
 uint8_t *allocate_ustrmem (int);
 
-int lookup_loifaces(char *lo_ip, uint8_t *lo_mac){
-
-	struct hwa_info	*hwa, *hwahead;
-	struct sockaddr	*sa;
-	char   *ptr;
-	int    i, prflag;
-
-	printf("\n");
-
-	for (hwahead = hwa = Get_hw_addrs(); hwa != NULL; hwa = hwa->hwa_next) {
-
-			if ( (sa = hwa->ip_addr) != NULL && strstr(Sock_ntop_host(sa, sizeof(*sa)), P_IP) != NULL){
-					printf("%s :%s", hwa->if_name, ((hwa->ip_alias) == IP_ALIAS) ? " (alias)\n" : "\n");
-					
-					printf("         IP addr = %s\n", Sock_ntop_host(sa, sizeof(*sa)));
-					strcpy(lo_ip, Sock_ntop_host(sa, sizeof(*sa)));
-					strcpy(iface, hwa->if_name);
-
-					prflag = 0;
-					i = 0;
-					do {
-							if (hwa->if_haddr[i] != '\0') {
-									prflag = 1;
-									break;
-							}
-					} while (++i < IF_HADDR);
-
-					char hw_addr[100] = {0};
-					if (prflag) {
-							printf("         HW addr = ");
-							ptr = hwa->if_haddr;
-                            memcpy(lo_mac, ptr, 6*sizeof(uint8_t));
-							i = IF_HADDR;
-							do {
-									char addr_str[10];
-									sprintf(addr_str, "%.2x%s", *ptr++ & 0xff, (i == 1) ? " " : ":");
-									strcat(hw_addr, addr_str);
-							} while (--i > 0);
-							hw_addr[strlen(hw_addr)] = '\0';
-					}
-					printf("%s", hw_addr);
-
-					printf("\n         interface index = %d\n\n", hwa->if_index);
-					free_hwa_info(hwahead);
-					return hwa->if_index;
-			}
-	}
-	return -1;
+int lookup_loifaces(char *lo_ip, uint8_t *lo_mac, char *host);
+void slice_str(const char * str, char * buffer, size_t start, size_t end)
+{
+    size_t j = 0;
+    for ( size_t i = start; i <= end; ++i ) {
+        buffer[j++] = str[i];
+    }
+    buffer[j] = 0;
 }
-
-int send_response(uint8_t *ethr_frame, arp_hdr *arpheader)
+int issue_arp(uint8_t *ethr_frame, arp_hdr *arpheader, int arp_type, char *resp_mac)
 {
   int i, status, frame_length, sd, bytes;
-  char *interface, *query, *src_ip, *sender_ip;
   arp_hdr arphdr;
-  uint8_t *src_mac, *sender_mac,  *dst_mac, *ether_frame;
+  uint8_t *sender_mac,  *dst_mac, *ether_frame;
 //  struct addrinfo hints, *res;
   struct sockaddr_in *ipv4;
   struct sockaddr_ll device;
 
 	
-  src_mac = allocate_ustrmem (6);
   sender_mac = allocate_ustrmem (6);
   dst_mac = allocate_ustrmem (6);
   ether_frame = allocate_ustrmem (IP_MAXPACKET);
-  query = allocate_strmem (40);
-  sender_ip = allocate_strmem (40);
-  src_ip = allocate_strmem (INET_ADDRSTRLEN);
-//  lookup_loifaces(src_ip, src_mac);
 
 	memset (&device, 0, sizeof (device));
-	
-	if ((device.sll_ifindex = lookup_loifaces(src_ip, src_mac)) < 0){
-			perror("Failed to obtain an index");
+	device.sll_ifindex = ifidx;
+
+    memcpy(dst_mac, ethr_frame, 6 * sizeof (uint8_t));
+
+
+	if ((status = inet_pton (AF_INET, lo_ip, &arphdr.sender_ip)) != 1) {
+			fprintf (stderr, "inet_pton() failed for source IP address.\nError message: %s", strerror (status));
 			exit (EXIT_FAILURE);
 	}
 
-
-    memcpy(dst_mac, ethr_frame, 6 * sizeof (uint8_t));
-    memcpy(query, arpheader->target_ip, 4*sizeof(uint8_t));
-    sprintf(query, "%u.%u.%u.%u", arpheader->target_ip[0], arpheader->target_ip[1], arpheader->target_ip[2], arpheader->target_ip[3]);
-    sprintf(sender_ip, "%u.%u.%u.%u", arpheader->sender_ip[0], arpheader->sender_ip[1], arpheader->sender_ip[2], arpheader->sender_ip[3]);
-    if (strcmp(query, src_ip) != 0){
-        printf("None of my business\n");
-        free(src_mac);
-        free(dst_mac) ;
-        free(ether_frame);
-        free(query);
-        free(src_ip);
-        free(sender_ip);
-        free(sender_mac);
-        return -1;
-    }
-
-    //  memset (&hints, 0, sizeof (struct addrinfo));
-
-//  hints.ai_family = AF_INET;
-//  hints.ai_socktype = SOCK_STREAM;
-//  hints.ai_flags = hints.ai_flags | AI_CANONNAME;
-
-    if ((status = inet_pton (AF_INET, src_ip, &arphdr.sender_ip)) != 1) {
-      fprintf (stderr, "inet_pton() failed for source IP address.\nError message: %s", strerror (status));
-      exit (EXIT_FAILURE);
-  }
-  
-  memcpy (&arphdr.target_ip, arpheader->sender_ip, 4 * sizeof (uint8_t));
+	memcpy (&arphdr.target_ip, arpheader->sender_ip, 4 * sizeof (uint8_t));
   device.sll_family = AF_PACKET;
   memcpy (device.sll_addr, src_mac, 6 * sizeof (uint8_t));
   device.sll_halen = 6;
   device.sll_hatype = ARPHRD_ETHER;
-    
-    FILE * fp, *fp_out;
-    char * line = NULL;
-    char line_found[100] = {0};
-    size_t len = 0;
-    ssize_t read;
-    fp = fopen("bagl.log", "r");
-    fp_out = fopen("bagl.log.2", "w+");
-
-    while ((read = getline(&line, &len, fp)) != -1) {
-        if (strstr(line, sender_ip) != NULL){
-            strcpy(line_found, line);
-            printf("Cache entry found: %s\n", line);
-        }
-        else {
-            fprintf(fp_out, "%s", line);
-        }
-    }
-    sprintf(sender_mac, "%02x:%02x:%02x:%02x:%02x:%02x", arpheader->sender_mac[0],arpheader->sender_mac[1],arpheader->sender_mac[2],arpheader->sender_mac[3],arpheader->sender_mac[4],arpheader->sender_mac[5]); 
-    char log_str[100];
-    sprintf(log_str, "<%s, %s, %d, %d>", sender_ip, sender_mac, device.sll_ifindex, device.sll_hatype);
-    fprintf(fp_out, "%s", log_str);
-    fclose(fp);
-    fclose(fp_out);
-
-    rename("bagl.log.2", "bagl.log");
     
 
   // Hardware type (16 bits): 1 for ethernet
@@ -168,7 +72,7 @@ int send_response(uint8_t *ethr_frame, arp_hdr *arpheader)
   arphdr.plen = 4;
 
   // OpCode: 1 for ARP request
-  arphdr.opcode = htons (ARPOP_RESPONSE);
+  arphdr.opcode = htons (arp_type);
 
   // Sender hardware address (48 bits): MAC address
   memcpy (&arphdr.sender_mac, src_mac, 6 * sizeof (uint8_t));
@@ -177,11 +81,17 @@ int send_response(uint8_t *ethr_frame, arp_hdr *arpheader)
   // See getaddrinfo() resolution of src_ip.
 
   // Target hardware address (48 bits): zero, since we don't know it yet.
-  memset (&arphdr.target_mac, 0, 6 * sizeof (uint8_t));
-
-  // Target protocol address (32 bits)
-  // See getaddrinfo() resolution of target.
-
+  if (arp_type == ARPOP_REQUEST)
+  	memset (&arphdr.target_mac, 0, 6 * sizeof (uint8_t));
+  else{
+  	int target_temp[6];
+  	uint8_t target_mac[6];
+	sscanf(resp_mac, "%x:%x:%x:%x:%x:%x%*c", &target_temp[0], &target_temp[1], &target_temp[2], &target_temp[3], &target_temp[4], &target_temp[5]);
+	for(int i =0; i < 6; i++)
+		target_mac[i] = (uint8_t)target_temp[i];
+	memcpy(&arphdr.target_mac, target_mac, 6 * sizeof (uint8_t));
+  
+  }
   // Fill out ethernet frame header.
 
   // Ethernet frame length = ethernet header (MAC + MAC + ethernet type) + ethernet data (ARP header)
@@ -202,7 +112,7 @@ int send_response(uint8_t *ethr_frame, arp_hdr *arpheader)
   memcpy (ether_frame + ETH_HDRLEN, &arphdr, ARP_HDRLEN * sizeof (uint8_t));
 
   // Submit request for a raw socket descriptor.
-  if ((sd = socket (PF_PACKET, SOCK_RAW, htons (ETH_P_ALL))) < 0) {
+  if ((sd = socket (PF_PACKET, SOCK_RAW, htons (ARP_PID))) < 0) {
     perror ("socket() failed ");
     exit (EXIT_FAILURE);
   }
@@ -213,40 +123,12 @@ int send_response(uint8_t *ethr_frame, arp_hdr *arpheader)
       exit (EXIT_FAILURE);
   }
 
-  printf ("\nEthernet Response frame header:\n");
-  printf ("Destination MAC: ");
-  for (i=0; i<5; i++) {
-      printf ("%02x:", ether_frame[i]);
-  }
-  printf ("%02x\n", ether_frame[5]);
-  printf ("Source MAC: ");
-  for (i=0; i<5; i++) {
-      printf ("%02x:", ether_frame[i+6]);
-  }
-  printf ("%02x\n", ether_frame[11]);
-  printf ("ARP, Reply ");
-  printf ("%u.%u.%u.%u (",
-          arpheader->target_ip[0], arpheader->target_ip[1], arpheader->target_ip[2], arpheader->target_ip[3]);
-  for (i=0; i<5; i++) {
-      printf ("%02x:", arpheader->target_mac[i]);
-  }
-  printf ("%02x) ", arpheader->target_mac[5]);
-  printf ("is-at %s (", src_ip);
-  for (i=0; i<5; i++) {
-      printf ("%02x:", src_mac[i]);
-  }
-  printf ("%02x)\n", src_mac[5]);
-
   // Close socket descriptor.
   close (sd);
 
   // Free allocated memory.
-  free (src_mac);
   free (dst_mac);
   free (ether_frame);
-  free (query);
-  free (src_ip);
-  free(sender_ip);
   free(sender_mac);
   return (EXIT_SUCCESS);
 }
@@ -256,11 +138,24 @@ int main(int arc, char **argv){
   uint8_t *ether_frame;
   arp_hdr *arphdr;
 
+
+
+
+  struct hostent* hen;
+  char hostname[1024];
+  hostname[1023] = '\0';
+  gethostname(hostname, 1023);
+  hen = gethostbyname(hostname);
+  printf("h_name: %s\n", hen->h_name);
+  if ((ifidx = lookup_loifaces(lo_ip, src_mac, hen->h_name)) < 0){
+		  perror("Could not find device interface");
+		  return 0;
+  }
   // Allocate memory for various arrays.
   ether_frame = allocate_ustrmem (IP_MAXPACKET);
 
   // Submit request for a raw socket descriptor.
-  if ((sd = socket (PF_PACKET, SOCK_RAW, htons (ETH_P_ALL))) < 0) {
+  if ((sd = socket (PF_PACKET, SOCK_RAW, htons (ARP_PID))) < 0) {
     perror ("socket() failed ");
     exit (EXIT_FAILURE);
   }
@@ -279,105 +174,150 @@ int main(int arc, char **argv){
               continue;  // Something weird happened, but let's try again.
           } else {
               perror ("recv() failed:");
-              exit (EXIT_FAILURE);
-          }
-      }
-      else{
-          if (ntohs(arphdr->opcode) == ARPOP_REQUEST){
+			  exit (EXIT_FAILURE);
+		  }
+	  }
+	  else{
+			  if (ntohs(arphdr->opcode) == ARPOP_REQUEST){
 
-              printf ("\nEthernet Request frame header:\n");
-              printf ("Destination MAC: ");
-              for (i=0; i<5; i++) {
-                  printf ("%02x:", ether_frame[i]);
-              }
-              printf ("%02x\n", ether_frame[5]);
-              printf ("Source MAC: ");
-              for (i=0; i<5; i++) {
-                  printf ("%02x:", ether_frame[i+6]);
-              }
-              printf ("%02x\n", ether_frame[11]);
-              printf ("ARP, Request who-has ");
-              printf ("%u.%u.%u.%u (",
-                      arphdr->target_ip[0], arphdr->target_ip[1], arphdr->target_ip[2], arphdr->target_ip[3]);
-              for (i=0; i<5; i++) {
-                  printf ("%02x:", arphdr->target_mac[i]);
-              }
-              printf ("%02x) ", arphdr->target_mac[5]);
-              printf ("tell: %u.%u.%u.%u (",
-                      arphdr->sender_ip[0], arphdr->sender_ip[1], arphdr->sender_ip[2], arphdr->sender_ip[3]);
+					  char query[50] = {0};
+					  char sender_ip[50] = {0};
+					  char sender_mac[50] = {0};
 
-              for (i=0; i<5; i++) {
-                  printf ("%02x:", arphdr->sender_mac[i]);
-              }
-              printf ("%02x)\n", arphdr->sender_mac[5]);
+					  printf ("\nEthernet Request frame header:\n");
 
-              send_response(ether_frame, arphdr);
-              fflush(stdout);
-        }
+					  printf ("Destination MAC: ");
+					  for (i=0; i<5; i++) {
+							  printf ("%02x:", ether_frame[i]);
+					  }
+					  printf ("%02x\n", ether_frame[5]);
+
+					  printf ("Source MAC: ");
+					  for (i=0; i<5; i++) {
+							  printf ("%02x:", ether_frame[i+6]);
+					  }
+					  printf ("%02x\n", ether_frame[11]);
+
+					  printf ("ARP, Request who-has ");
+
+					  sprintf (query, "%u.%u.%u.%u",
+									  arphdr->target_ip[0], arphdr->target_ip[1], arphdr->target_ip[2], arphdr->target_ip[3]);
+					  printf("%s (", query);
+
+					  for (i=0; i<5; i++) {
+							  printf ("%02x:", arphdr->target_mac[i]);
+					  }
+					  printf ("%02x) tell:", arphdr->target_mac[5]);
+
+					  sprintf (sender_ip, "%u.%u.%u.%u",
+									  arphdr->sender_ip[0], arphdr->sender_ip[1], arphdr->sender_ip[2], arphdr->sender_ip[3]);
+					  printf("%s ", sender_ip);
+
+					  sprintf(sender_mac, "%02x:%02x:%02x:%02x:%02x:%02x", arphdr->sender_mac[0],arphdr->sender_mac[1],arphdr->sender_mac[2],arphdr->sender_mac[3],arphdr->sender_mac[4],arphdr->sender_mac[5]); 
+					  printf ("(%s)\n", sender_mac);
+
+					  //Check local Cache
+					  FILE * fp, *fp_out;
+					  char * line = NULL;
+					  char resp_mac[100] = {0};
+					  char cache_res[100] = {0};
+					  int res_me = 0;
+					  int res_else = 0;
+					  size_t len = 0;
+					  ssize_t read;
+					  fp = fopen("bagl.log", "r");
+					  fp_out = fopen("bagl.log.2", "w+");
+					  if (strcmp(lo_ip, query) == 0){
+							  res_me = 1; // I am the queried node
+					  }
+					  while (fp != NULL && (read = getline(&line, &len, fp)) != -1) {
+							  
+							  char line_ip[50] = {0};
+							  char copy_line[100] = {0};
+							  strcpy(copy_line, line);
+							  char *temp_line = strtok(line, ",");
+							  slice_str(temp_line, line_ip, 1, strlen(temp_line)-1);
+							  
+							if (strcmp(line_ip, sender_ip) == 0){ 
+									  printf("Sender Query IP Found in Cache: %s\n", copy_line); 
+									  res_me = 1;
+							  }
+							  else if (strcmp(line_ip, query) == 0){
+									  strcpy(cache_res, copy_line);
+									  printf("Cache entry found: %s\n", copy_line);
+									  fprintf(fp_out, "%s", copy_line);
+									  res_else = 1;
+							  }
+							  else {
+									  fprintf(fp_out, "%s", copy_line);
+							  }
+					  }
+					  if (res_me){
+							  char log_str[100];
+							  //TODO Fix this index
+							  strcpy(resp_mac, src_mac);
+							  sprintf(log_str, "<%s,%s,%d,%d>\n", sender_ip, sender_mac, ifidx, -1);
+							  fprintf(fp_out, "%s", log_str);
+					  }
+					  else if (res_else){
+							  strtok(cache_res, ",");
+							  strcpy(resp_mac, strtok(NULL, "\n"));
+					  }
+					  if (fp)
+							  fclose(fp);
+					  fclose(fp_out);
+
+					  rename("bagl.log.2", "bagl.log");
 
 
+					  if (res_me || res_else)
+							  issue_arp(ether_frame, arphdr, ARPOP_RESPONSE, resp_mac);
+					  else
+							  issue_arp(ether_frame, arphdr, ARPOP_REQUEST, resp_mac);
+					  fflush(stdout);
+			  }
+			  else if (ntohs(arphdr->opcode) == ARPOP_RESPONSE){
+
+
+					  char target_mac[100] = {0};
+					  char target_ip[100] = {0};
+					  printf ("\nEthernet Response frame header:\n");
+					  printf ("Destination MAC: ");
+					  for (i=0; i<5; i++) {
+							  printf ("%02x:", ether_frame[i]);
+					  }
+					  printf ("%02x\n", ether_frame[5]);
+					  printf ("Source MAC: ");
+					  for (i=0; i<5; i++) {
+							  printf ("%02x:", ether_frame[i+6]);
+					  }
+					  printf ("%02x\n", ether_frame[11]);
+					  printf ("ARP, Reply ");
+						sprintf (target_ip, "%u.%u.%u.%u",
+									  arphdr->target_ip[0], arphdr->target_ip[1], arphdr->target_ip[2], arphdr->target_ip[3]);
+					  printf("%s ", target_ip);
+
+					  sprintf(target_mac, "%02x:%02x:%02x:%02x:%02x:%02x", arphdr->target_mac[0],arphdr->target_mac[1],arphdr->target_mac[2],arphdr->target_mac[3],arphdr->target_mac[4],arphdr->target_mac[5]); 
+					  printf ("(%s) ", target_mac);
+					  
+					  printf ("is-at %s (", lo_ip);
+					  for (i=0; i<5; i++) {
+							  printf ("%02x:", src_mac[i]);
+					  }
+					  
+					  FILE * fp;
+					  fp = fopen("bagl.log", "a+");
+					  char log_str[100];
+					  //TODO Fix this index
+					  sprintf(log_str, "<%s,%s,%d,%d>\n", target_ip, target_mac, ifidx, -1);
+					  fprintf(fp, "%s", log_str);
+					  fclose(fp);
+
+					  //Send to tour back  TODO
+			  }
     }
   }
   close (sd);
 
-  // Print out contents of received ethernet frame.
-  printf ("\nEthernet frame header:\n");
-  printf ("Destination MAC (this node): ");
-  for (i=0; i<5; i++) {
-    printf ("%02x:", ether_frame[i]);
-  }
-  printf ("%02x\n", ether_frame[5]);
-  printf ("Source MAC: ");
-  for (i=0; i<5; i++) {
-    printf ("%02x:", ether_frame[i+6]);
-  }
-  printf ("%02x\n", ether_frame[11]);
-  // Next is ethernet type code (ETH_P_ARP for ARP).
-  // http://www.iana.org/assignments/ethernet-numbers
-  printf ("Ethernet type code (2054 = ARP): %u\n", ((ether_frame[12]) << 8) + ether_frame[13]);
-
 }    
     
-    
-    
-char *
-allocate_strmem (int len)
-{
-  void *tmp;
-
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_strmem().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = (char *) malloc (len * sizeof (char));
-  if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (char));
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array allocate_strmem().\n");
-    exit (EXIT_FAILURE);
-  }
-}
-
-// Allocate memory for an array of unsigned chars.
-uint8_t *
-allocate_ustrmem (int len)
-{
-  void *tmp;
-
-  if (len <= 0) {
-    fprintf (stderr, "ERROR: Cannot allocate memory because len = %i in allocate_ustrmem().\n", len);
-    exit (EXIT_FAILURE);
-  }
-
-  tmp = (uint8_t *) malloc (len * sizeof (uint8_t));
-  if (tmp != NULL) {
-    memset (tmp, 0, len * sizeof (uint8_t));
-    return (tmp);
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array allocate_ustrmem().\n");
-    exit (EXIT_FAILURE);
-  }
-}
-
