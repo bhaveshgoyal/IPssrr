@@ -5,22 +5,24 @@
 #include <linux/if_packet.h>
 #include <string.h>
 #define BUFSIZE 1500
+#define BPORT 7357
 #define IPROTO_ICMP 1
 // Define some constants.
 
 char lo_ip[50];
 uint8_t src_mac[6];
+char lo_host[10];
 int ifidx = 0;
 char nexthop_ip[50];
 char prev_ip[20];
 char tour[50];
 char iface[20];
 int datalen = 56;
+int broad_cdown = -1;
 proto *protc;
 proto *rt_proto;
 
 pid_t pid;
-uint8_t nsent = 0;
 int       rt;
 char     sendbuf[BUFSIZE];
 
@@ -33,14 +35,23 @@ int send_icmpp(char *srcip, uint8_t *srcmac, int ifidx, char *dsthost);
 
 uint8_t *allocate_ustrmem (int len);
 char *allocate_strmem (int len);
-
+void send_broadcast();
 void sig_alrm(int signo)
 {
  //   (*pr->fsend)();//
- 	fprintf(stdout, "Sending ICMP");
+ 	fprintf(stdout, "Sending ICMP Ping ");
 	fflush(stdout);
     send_icmpp(lo_ip, src_mac, ifidx, prev_ip);
-    alarm(10);
+	if (broad_cdown == 0){
+		fprintf(stdout, "<<<<< This is node %s. Tour has ended. >>>>>\n", lo_host);
+		fprintf(stdout, "Node %s, sending: Tour has ended\n", lo_host);
+		fflush(stdout);
+		send_broadcast();
+	}
+    if (tour_recv == 1 && broad_cdown != 0){
+		broad_cdown--;
+		alarm(1);  //Important that it ticks every second. Broadcast after 5 seconds depends on it
+	}
     return;
 }
 
@@ -196,8 +207,25 @@ void send_rt(){
 
 }
 void recv_rt(){
-    
-    int recvfd = Socket(AF_INET, SOCK_RAW, pid);
+
+
+	int recvbm = Socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); //BroadCast Socket Receiver (UDP)
+
+	struct sockaddr_in bmaddr;
+	memset(&bmaddr, 0, sizeof(bmaddr));
+
+	bmaddr.sin_family = AF_INET;
+	bmaddr.sin_port = htons(BPORT);
+	bmaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	if (bind(recvbm, (struct sockaddr *)&bmaddr, sizeof(bmaddr)) < 0)
+			perror("Could not bind to receiver broadcast socket");
+
+	struct sockaddr_in rcvbmaddr;
+	socklen_t rcvbmlen = sizeof(rcvbmaddr);
+
+
+    int recvfd = Socket(AF_INET, SOCK_RAW, pid); // RT Socket Receiver (rt)
     char            recvbuf[BUFSIZE];
     ssize_t         n;
     struct sockaddr servaddr;
@@ -217,7 +245,7 @@ void recv_rt(){
 	rec_ip = allocate_strmem (INET_ADDRSTRLEN);
 	recv_ether_frame = allocate_ustrmem (IP_MAXPACKET);
 	
-	if ((recvsd = socket (PF_PACKET, SOCK_RAW, htons (ETH_P_ALL))) < 0) {
+	if ((recvsd = socket (PF_PACKET, SOCK_RAW, htons (ETH_P_ALL))) < 0) { //ICMP Socket Receiver (pg)
 			perror ("socket() failed to obtain a receive socket descriptor ");
 			exit (EXIT_FAILURE);
 	}
@@ -232,7 +260,8 @@ void recv_rt(){
 	fd_set readfs;
 	FD_SET(recvfd, &readfs);
 	FD_SET(recvsd, &readfs);
-	int maxfd = -1;
+	FD_SET(recvbm, &readfs);
+	int maxfd = max(max(recvfd, recvsd), recvbm);
 
 	sigset_t sigset, oldset;
 	sigemptyset(&sigset);
@@ -245,7 +274,8 @@ void recv_rt(){
 			FD_SET(recvfd, &readfs);
 //			if (tour_recv == 1){
 					FD_SET(recvsd, &readfs);
-					maxfd = max(recvfd, recvsd);
+					FD_SET(recvbm, &readfs);
+					maxfd = max(max(recvfd, recvsd), recvbm);
 //			}
 //			else
 //					maxfd = recvfd;
@@ -263,8 +293,8 @@ void recv_rt(){
 					fprintf(stdout, "Tour received %s %s\n", recvbuf+sizeof(struct iphdr), prev_ip);
 					process_rt((char *)(recvbuf+sizeof(struct iphdr)));
 					if (tour_recv == 0){
-						sig_alrm(SIGALRM);
 						tour_recv = 1;
+						sig_alrm(SIGALRM);
 					}
 			}
 			else if (FD_ISSET(recvsd, &readfs)){
@@ -288,9 +318,50 @@ void recv_rt(){
 							fflush(stdout);
 					}
 			}
+			else if (FD_ISSET(recvbm, &readfs)){
+				
+				char bbuf[BUFSIZE];
+				if (recvfrom(recvbm, bbuf, BUFSIZE, 0, (struct sockaddr *)&rcvbmaddr, &rcvbmlen) < 0)
+					perror("'Recvfrom' from BroadCast Socket failed");
+
+				fprintf(stdout, "Node %s, received: %s\n", lo_host, bbuf);
+				tour_recv = 0;
+				broad_cdown = -1;
+				fflush(stdout);
+			}
 	}
 	close(recvsd);
 	free(recv_ether_frame);
+}
+void send_broadcast(){
+
+	int b_sock;
+	char *b_ip = "255.255.255.255";
+	struct sockaddr_in broadaddr;
+
+	char bstring[50] = {0};
+	sprintf(bstring, "<<<<< This is node %s. Tour has ended. >>>>>\n", lo_host);
+
+
+	if ((b_sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
+		perror("Could not Create Broadcast Socket");
+
+	int broad_perm = 1;
+
+	if (setsockopt(b_sock, SOL_SOCKET, SO_BROADCAST, (void *) &broad_perm,sizeof(broad_perm)) < 0){
+			perror("Could not set broadcast permission for socket");
+	}
+
+	memset(&broadaddr, 0, sizeof(broadaddr));   
+	broadaddr.sin_family = AF_INET;                 
+	broadaddr.sin_addr.s_addr = inet_addr(b_ip);
+	broadaddr.sin_port = htons(BPORT);
+
+	if (sendto(b_sock, bstring, strlen(bstring), 0, (struct sockaddr *)&broadaddr, sizeof(broadaddr)) != strlen(bstring)){
+			perror("Could not 'sendto' Broadcast msg");
+	}
+	close(b_sock);
+
 }
 void process_rt(char *recvbuf){
 
@@ -303,9 +374,8 @@ void process_rt(char *recvbuf){
     char *rem = strtok(NULL, "\n");
     
 	if (!rem){
-		fprintf(stderr, "End of Tour, Broadcast Now\n");
-		//Broadcast now;
-		while(1);
+		broad_cdown = 4; //Init Boradcast Countdown
+		return;
 	}
     
 	strcpy(tour, rem);
@@ -340,7 +410,8 @@ int main(int argc, char **argv){
 	hostname[1023] = '\0';
 	gethostname(hostname, 1023);
 	hen = gethostbyname(hostname);
-	printf("h_name: %s\n", hen->h_name);
+	strcpy(lo_host, hen->h_name);
+	printf("h_name: %s\n", lo_host);
 	if ((ifidx = lookup_loifaces(lo_ip, src_mac, hen->h_name)) < 0){
 		perror("Could not find device interface");
 		return 0;
