@@ -9,6 +9,7 @@
 #define IP4_HDRLEN 20  // IPv4 header length                                                      
 #define ICMP_HDRLEN 8 
 #define	IP_ALIAS  	 1	/* hwa_addr is an alias */
+
 typedef struct _arp_hdr arp_hdr;
 typedef unsigned short uint16_t;
 typedef          short  int16_t;

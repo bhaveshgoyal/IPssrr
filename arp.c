@@ -139,8 +139,6 @@ int main(int arc, char **argv){
   arp_hdr *arphdr;
 
 
-
-
   struct hostent* hen;
   char hostname[1024];
   hostname[1023] = '\0';
@@ -167,155 +165,200 @@ int main(int arc, char **argv){
   // Keep at it until we get an ARP reply.
   arphdr = (arp_hdr *) (ether_frame + 6 + 6 + 2);
 //  while (((((ether_frame[12]) << 8) + ether_frame[13]) != ETH_P_ARP) || (ntohs (arphdr->opcode) != ARPOP_REQUEST)) {
+  int unfd;
+  struct sockaddr_un unservaddr, uncliaddr;
+  socklen_t clilen;
+
+  unfd = Socket(AF_LOCAL, SOCK_STREAM, 0);
+  
+  unlink(UNIXSTR_PATH);
+  bzero(&unservaddr, sizeof(unservaddr));
+
+  unservaddr.sun_family = AF_LOCAL;
+  strcpy(unservaddr.sun_path, UNIXSTR_PATH);
+
+  Bind(unfd, (SA *) &unservaddr, sizeof(unservaddr));
+  Listen(unfd, LISTENQ);
+  
+  
+  fd_set readfs;
+  FD_SET(unfd, &readfs);
+  FD_SET(sd, &readfs);
+  int maxfd = -1;
   while(1){
-      if ((status = recv(sd, ether_frame, IP_MAXPACKET, 0)) < 0) {
-          if (errno == EINTR) {
-              memset (ether_frame, 0, IP_MAXPACKET * sizeof (uint8_t));
-              continue;  // Something weird happened, but let's try again.
-          } else {
-              perror ("recv() failed:");
-			  exit (EXIT_FAILURE);
+
+		  FD_ZERO(&readfs);
+		  FD_SET(sd, &readfs);
+		  FD_SET(unfd, &readfs);
+		  maxfd = max(sd, unfd);
+
+		  int status = select(maxfd+1, &readfs, NULL, NULL, NULL);
+		  if (status < 0)
+				  continue;
+
+		  if (FD_ISSET(unfd, &readfs)){
+		  			int unconn  = accept(unfd, (SA *) &uncliaddr, &clilen);
+				char query_line[MAXLINE];
+		 		if ( (Read(unconn, query_line, MAXLINE)) == 0) {
+		  		fprintf(stdout, "Socket SET");
+				fflush(stdout);
+					continue;
+				
+				}
+				fprintf(stdout, "Query: %s", query_line);
+				fflush(stdout);
+		  
 		  }
-	  }
-	  else{
-			  if (ntohs(arphdr->opcode) == ARPOP_REQUEST){
+		  else if (FD_ISSET(sd, &readfs)){
+				  if (recv(sd, ether_frame, IP_MAXPACKET, 0) < 0) {
+						  if (errno == EINTR) {
+								  memset (ether_frame, 0, IP_MAXPACKET * sizeof (uint8_t));
+								  continue;  // Something weird happened, but let's try again.
+						  } else {
+								  perror ("recv() failed:");
+								  exit (EXIT_FAILURE);
+						  }
+				  }
+				  else{
+						  if (ntohs(arphdr->opcode) == ARPOP_REQUEST){
 
-					  char query[50] = {0};
-					  char sender_ip[50] = {0};
-					  char sender_mac[50] = {0};
+								  char query[50] = {0};
+								  char sender_ip[50] = {0};
+								  char sender_mac[50] = {0};
 
-					  printf ("\nEthernet Request frame header:\n");
+								  printf ("\nEthernet Request frame header:\n");
 
-					  printf ("Destination MAC: ");
-					  for (i=0; i<5; i++) {
-							  printf ("%02x:", ether_frame[i]);
-					  }
-					  printf ("%02x\n", ether_frame[5]);
+								  printf ("Destination MAC: ");
+								  for (i=0; i<5; i++) {
+										  printf ("%02x:", ether_frame[i]);
+								  }
+								  printf ("%02x\n", ether_frame[5]);
 
-					  printf ("Source MAC: ");
-					  for (i=0; i<5; i++) {
-							  printf ("%02x:", ether_frame[i+6]);
-					  }
-					  printf ("%02x\n", ether_frame[11]);
+								  printf ("Source MAC: ");
+								  for (i=0; i<5; i++) {
+										  printf ("%02x:", ether_frame[i+6]);
+								  }
+								  printf ("%02x\n", ether_frame[11]);
 
-					  printf ("ARP, Request who-has ");
+								  printf ("ARP, Request who-has ");
 
-					  sprintf (query, "%u.%u.%u.%u",
-									  arphdr->target_ip[0], arphdr->target_ip[1], arphdr->target_ip[2], arphdr->target_ip[3]);
-					  printf("%s (", query);
+								  sprintf (query, "%u.%u.%u.%u",
+												  arphdr->target_ip[0], arphdr->target_ip[1], arphdr->target_ip[2], arphdr->target_ip[3]);
+								  printf("%s (", query);
 
-					  for (i=0; i<5; i++) {
-							  printf ("%02x:", arphdr->target_mac[i]);
-					  }
-					  printf ("%02x) tell:", arphdr->target_mac[5]);
+								  for (i=0; i<5; i++) {
+										  printf ("%02x:", arphdr->target_mac[i]);
+								  }
+								  printf ("%02x) tell:", arphdr->target_mac[5]);
 
-					  sprintf (sender_ip, "%u.%u.%u.%u",
-									  arphdr->sender_ip[0], arphdr->sender_ip[1], arphdr->sender_ip[2], arphdr->sender_ip[3]);
-					  printf("%s ", sender_ip);
+								  sprintf (sender_ip, "%u.%u.%u.%u",
+												  arphdr->sender_ip[0], arphdr->sender_ip[1], arphdr->sender_ip[2], arphdr->sender_ip[3]);
+								  printf("%s ", sender_ip);
 
-					  sprintf(sender_mac, "%02x:%02x:%02x:%02x:%02x:%02x", arphdr->sender_mac[0],arphdr->sender_mac[1],arphdr->sender_mac[2],arphdr->sender_mac[3],arphdr->sender_mac[4],arphdr->sender_mac[5]); 
-					  printf ("(%s)\n", sender_mac);
+								  sprintf(sender_mac, "%02x:%02x:%02x:%02x:%02x:%02x", arphdr->sender_mac[0],arphdr->sender_mac[1],arphdr->sender_mac[2],arphdr->sender_mac[3],arphdr->sender_mac[4],arphdr->sender_mac[5]); 
+								  printf ("(%s)\n", sender_mac);
 
-					  //Check local Cache
-					  FILE * fp, *fp_out;
-					  char * line = NULL;
-					  char resp_mac[100] = {0};
-					  char cache_res[100] = {0};
-					  int res_me = 0;
-					  int res_else = 0;
-					  size_t len = 0;
-					  ssize_t read;
-					  fp = fopen("bagl.log", "r");
-					  fp_out = fopen("bagl.log.2", "w+");
-					  if (strcmp(lo_ip, query) == 0){
-							  res_me = 1; // I am the queried node
-					  }
-					  while (fp != NULL && (read = getline(&line, &len, fp)) != -1) {
-							  
-							  char line_ip[50] = {0};
-							  char copy_line[100] = {0};
-							  strcpy(copy_line, line);
-							  char *temp_line = strtok(line, ",");
-							  slice_str(temp_line, line_ip, 1, strlen(temp_line)-1);
-							  
-							if (strcmp(line_ip, sender_ip) == 0){ 
-									  printf("Sender Query IP Found in Cache: %s\n", copy_line); 
-									  res_me = 1;
-							  }
-							  else if (strcmp(line_ip, query) == 0){
-									  strcpy(cache_res, copy_line);
-									  printf("Cache entry found: %s\n", copy_line);
-									  fprintf(fp_out, "%s", copy_line);
-									  res_else = 1;
-							  }
-							  else {
-									  fprintf(fp_out, "%s", copy_line);
-							  }
-					  }
-					  if (res_me){
-							  char log_str[100];
-							  //TODO Fix this index
-							  strcpy(resp_mac, src_mac);
-							  sprintf(log_str, "<%s,%s,%d,%d>\n", sender_ip, sender_mac, ifidx, -1);
-							  fprintf(fp_out, "%s", log_str);
-					  }
-					  else if (res_else){
-							  strtok(cache_res, ",");
-							  strcpy(resp_mac, strtok(NULL, "\n"));
-					  }
-					  if (fp)
-							  fclose(fp);
-					  fclose(fp_out);
+								  //Check local Cache
+								  FILE * fp, *fp_out;
+								  char * line = NULL;
+								  char resp_mac[100] = {0};
+								  char cache_res[100] = {0};
+								  int res_me = 0;
+								  int res_else = 0;
+								  size_t len = 0;
+								  ssize_t read;
+								  fp = fopen("bagl.log", "r");
+								  fp_out = fopen("bagl.log.2", "w+");
+								  if (strcmp(lo_ip, query) == 0){
+										  res_me = 1; // I am the queried node
+								  }
+								  while (fp != NULL && (read = getline(&line, &len, fp)) != -1) {
 
-					  rename("bagl.log.2", "bagl.log");
+										  char line_ip[50] = {0};
+										  char copy_line[100] = {0};
+										  strcpy(copy_line, line);
+										  char *temp_line = strtok(line, ",");
+										  slice_str(temp_line, line_ip, 1, strlen(temp_line)-1);
 
+										  if (strcmp(line_ip, sender_ip) == 0){ 
+												  printf("Sender Query IP Found in Cache: %s\n", copy_line); 
+												  res_me = 1;
+										  }
+										  else if (strcmp(line_ip, query) == 0){
+												  strcpy(cache_res, copy_line);
+												  printf("Cache entry found: %s\n", copy_line);
+												  fprintf(fp_out, "%s", copy_line);
+												  res_else = 1;
+										  }
+										  else {
+												  fprintf(fp_out, "%s", copy_line);
+										  }
+								  }
+								  if (res_me){
+										  char log_str[100];
+										  //TODO Fix this index
+										  strcpy(resp_mac, src_mac);
+										  sprintf(log_str, "<%s,%s,%d,%d>\n", sender_ip, sender_mac, ifidx, arphdr->htype);
+										  fprintf(fp_out, "%s", log_str);
+								  }
+								  else if (res_else){
+										  strtok(cache_res, ",");
+										  strcpy(resp_mac, strtok(NULL, "\n"));
+								  }
+								  if (fp)
+										  fclose(fp);
+								  fclose(fp_out);
 
-					  if (res_me || res_else)
-							  issue_arp(ether_frame, arphdr, ARPOP_RESPONSE, resp_mac);
-					  else
-							  issue_arp(ether_frame, arphdr, ARPOP_REQUEST, resp_mac);
-					  fflush(stdout);
-			  }
-			  else if (ntohs(arphdr->opcode) == ARPOP_RESPONSE){
+								  rename("bagl.log.2", "bagl.log");
 
 
-					  char target_mac[100] = {0};
-					  char target_ip[100] = {0};
-					  printf ("\nEthernet Response frame header:\n");
-					  printf ("Destination MAC: ");
-					  for (i=0; i<5; i++) {
-							  printf ("%02x:", ether_frame[i]);
-					  }
-					  printf ("%02x\n", ether_frame[5]);
-					  printf ("Source MAC: ");
-					  for (i=0; i<5; i++) {
-							  printf ("%02x:", ether_frame[i+6]);
-					  }
-					  printf ("%02x\n", ether_frame[11]);
-					  printf ("ARP, Reply ");
-						sprintf (target_ip, "%u.%u.%u.%u",
-									  arphdr->target_ip[0], arphdr->target_ip[1], arphdr->target_ip[2], arphdr->target_ip[3]);
-					  printf("%s ", target_ip);
+								  if (res_me || res_else)
+										  issue_arp(ether_frame, arphdr, ARPOP_RESPONSE, resp_mac);
+								  else
+										  issue_arp(ether_frame, arphdr, ARPOP_REQUEST, resp_mac);
+								  fflush(stdout);
+						  }
+						  else if (ntohs(arphdr->opcode) == ARPOP_RESPONSE){
 
-					  sprintf(target_mac, "%02x:%02x:%02x:%02x:%02x:%02x", arphdr->target_mac[0],arphdr->target_mac[1],arphdr->target_mac[2],arphdr->target_mac[3],arphdr->target_mac[4],arphdr->target_mac[5]); 
-					  printf ("(%s) ", target_mac);
-					  
-					  printf ("is-at %s (", lo_ip);
-					  for (i=0; i<5; i++) {
-							  printf ("%02x:", src_mac[i]);
-					  }
-					  
-					  FILE * fp;
-					  fp = fopen("bagl.log", "a+");
-					  char log_str[100];
-					  //TODO Fix this index
-					  sprintf(log_str, "<%s,%s,%d,%d>\n", target_ip, target_mac, ifidx, -1);
-					  fprintf(fp, "%s", log_str);
-					  fclose(fp);
 
-					  //Send to tour back  TODO
-			  }
-    }
+								  char target_mac[100] = {0};
+								  char target_ip[100] = {0};
+								  printf ("\nEthernet Response frame header:\n");
+								  printf ("Destination MAC: ");
+								  for (i=0; i<5; i++) {
+										  printf ("%02x:", ether_frame[i]);
+								  }
+								  printf ("%02x\n", ether_frame[5]);
+								  printf ("Source MAC: ");
+								  for (i=0; i<5; i++) {
+										  printf ("%02x:", ether_frame[i+6]);
+								  }
+								  printf ("%02x\n", ether_frame[11]);
+								  printf ("ARP, Reply ");
+								  sprintf (target_ip, "%u.%u.%u.%u",
+												  arphdr->target_ip[0], arphdr->target_ip[1], arphdr->target_ip[2], arphdr->target_ip[3]);
+								  printf("%s ", target_ip);
+
+								  sprintf(target_mac, "%02x:%02x:%02x:%02x:%02x:%02x", arphdr->target_mac[0],arphdr->target_mac[1],arphdr->target_mac[2],arphdr->target_mac[3],arphdr->target_mac[4],arphdr->target_mac[5]); 
+								  printf ("(%s) ", target_mac);
+
+								  printf ("is-at %s (", lo_ip);
+								  for (i=0; i<5; i++) {
+										  printf ("%02x:", src_mac[i]);
+								  }
+
+								  FILE * fp;
+								  fp = fopen("bagl.log", "a+");
+								  char log_str[100];
+								  //TODO Fix this index
+								  sprintf(log_str, "<%s,%s,%d,%d>\n", target_ip, target_mac, ifidx, arphdr->htype);
+								  fprintf(fp, "%s", log_str);
+								  fclose(fp);
+
+								  //Send to tour back  TODO
+						  }
+				  }
+		  }
   }
   close (sd);
 

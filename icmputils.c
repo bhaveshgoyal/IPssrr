@@ -14,7 +14,7 @@ char *allocate_strmem (int);
 uint8_t *allocate_ustrmem (int);
 int *allocate_intmem (int);
 int pid = 157;
-
+int areq(struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr);
 int
 send_icmpp(char *srcip, uint8_t *srcmac, int ifidx, char *dstip)
 {
@@ -50,6 +50,13 @@ send_icmpp(char *srcip, uint8_t *srcmac, int ifidx, char *dstip)
   fprintf(stdout, "INSIDE ICMP: %s %s\n", src_ip, dstip);
   fflush(stdout);
 //#TODO Find This using AREQ
+
+	struct sockaddr_in quer_addr;
+	struct hwaddr target_hw; 
+	socklen_t querylen = sizeof(quer_addr);
+	inet_pton(AF_INET, dstip, &(quer_addr.sin_addr));
+	areq((struct sockaddr *)&quer_addr, querylen, &target_hw);
+
   dst_mac[0] = 0xff;
   dst_mac[1] = 0xff;
   dst_mac[2] = 0xff;
@@ -198,6 +205,27 @@ send_icmpp(char *srcip, uint8_t *srcmac, int ifidx, char *dstip)
   return (EXIT_SUCCESS);
 }
 
+int areq(struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr){
+
+	int unfd;
+	struct sockaddr_un unservaddr;
+	unfd = Socket(AF_LOCAL, SOCK_STREAM, 0);
+
+	struct sockaddr_in *query = (struct sockaddr_in *)IPaddr;
+	char str[50] = {0};
+	inet_ntop(AF_INET, &(query->sin_addr), str, INET_ADDRSTRLEN);
+	bzero(&unservaddr, sizeof(unservaddr));
+	unservaddr.sun_family = AF_LOCAL;
+	 strcpy(unservaddr.sun_path, UNIXSTR_PATH);
+	 Connect(unfd, (SA *) &unservaddr, sizeof(unservaddr));
+	Write(unfd, str, sizeof(str));
+	while(1);
+
+
+
+
+
+}
 // Build IPv4 ICMP pseudo-header and call checksum function.
 uint16_t
 icmp4_checksum (struct icmp icmphdr, uint8_t *payload, int payloadlen)
