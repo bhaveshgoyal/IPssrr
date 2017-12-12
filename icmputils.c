@@ -14,6 +14,9 @@ char *allocate_strmem (int);
 uint8_t *allocate_ustrmem (int);
 int *allocate_intmem (int);
 int pid = 157;
+
+int arpwait = 5;
+
 int areq(struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr);
 int
 send_icmpp(char *srcip, uint8_t *srcmac, int ifidx, char *dstip)
@@ -55,14 +58,26 @@ send_icmpp(char *srcip, uint8_t *srcmac, int ifidx, char *dstip)
 	struct hwaddr target_hw; 
 	socklen_t querylen = sizeof(quer_addr);
 	inet_pton(AF_INET, dstip, &(quer_addr.sin_addr));
-	areq((struct sockaddr *)&quer_addr, querylen, &target_hw);
+	int ret = areq((struct sockaddr *)&quer_addr, querylen, &target_hw);
+//	if (ret < 0){
+//			fprintf(stderr, "MAC couldn't be found using ARP. Retrying using broadcast\n");
+			dst_mac[0] = 0xff;
+			dst_mac[1] = 0xff;
+			dst_mac[2] = 0xff;
+			dst_mac[3] = 0xff;
+			dst_mac[4] = 0xff;
+			dst_mac[5] = 0xff;
 
-  dst_mac[0] = 0xff;
-  dst_mac[1] = 0xff;
-  dst_mac[2] = 0xff;
-  dst_mac[3] = 0xff;
-  dst_mac[4] = 0xff;
-  dst_mac[5] = 0xff;
+//	}
+//	else {
+//		int tempdst_mac[6];
+//		sscanf(target_hw.sll_addr,"%02x%02x%02x%02x%02x%02x", &tempdst_mac[0], &tempdst_mac[1], &tempdst_mac[2], &tempdst_mac[3], &tempdst_mac[4], &tempdst_mac[5]);
+//		for(int i = 0; i < 5; i++){
+//			dst_mac[i] = (uint8_t)target_hw.sll_addr[i];
+//			fprintf(stdout, "UTIL: %02x:", dst_mac[i]);
+//			fflush(stdout);
+//		}
+//	}
 
   // Source IPv4 address: you need to fill this out
 //  strcpy (target, "www.google.com");
@@ -211,20 +226,51 @@ int areq(struct sockaddr *IPaddr, socklen_t sockaddrlen, struct hwaddr *HWaddr){
 	struct sockaddr_un unservaddr;
 	unfd = Socket(AF_LOCAL, SOCK_STREAM, 0);
 
+	char *UND_PATH = "/home/bgoyal/bagl.und";
 	struct sockaddr_in *query = (struct sockaddr_in *)IPaddr;
 	char str[50] = {0};
 	inet_ntop(AF_INET, &(query->sin_addr), str, INET_ADDRSTRLEN);
 	bzero(&unservaddr, sizeof(unservaddr));
 	unservaddr.sun_family = AF_LOCAL;
-	 strcpy(unservaddr.sun_path, UNIXSTR_PATH);
-	 Connect(unfd, (SA *) &unservaddr, sizeof(unservaddr));
-	Write(unfd, str, sizeof(str));
-	while(1);
+	strcpy(unservaddr.sun_path, UND_PATH);
+	Connect(unfd, (SA *) &unservaddr, sizeof(unservaddr));
+	
+	Write(unfd, str, sizeof(str)); //Query the server
+	
+	fd_set readfs;
 
 
+	FD_ZERO(&readfs);
+	FD_SET(unfd, &readfs);
+	int maxfd = unfd;
+	
+	while(1){
 
+		FD_ZERO(&readfs);
+		FD_SET(unfd, &readfs);
+		maxfd = unfd;
 
-
+		struct timeval tv = {5, 0};
+		if (select(maxfd+1, &readfs, NULL, NULL, &tv) < 0){
+			fprintf(stderr, "AREQ Timed out.\n");
+			return -1;
+		}
+		if (FD_ISSET(unfd, &readfs)){
+			char resp_mac[50] = {0};
+			if (read(unfd, resp_mac, sizeof(resp_mac)) == 0){
+				return 1;
+			}
+			fprintf(stdout, "AREQ Response Received: %s\n", resp_mac);
+			fflush(stdout);
+			int target_dstmac[6];
+			sscanf(resp_mac, "%x%x%x%x%x%x%*c", &target_dstmac[0], &target_dstmac[1], &target_dstmac[2], &target_dstmac[3], &target_dstmac[4], &target_dstmac[5]);
+			for(int i = 0; i < 6; i++)
+				HWaddr->sll_addr[i] = (uint8_t)target_dstmac[i];
+			return 1;
+		}
+	}
+	fprintf(stderr, "Exiting AREQ API\n");
+	return -1;
 }
 // Build IPv4 ICMP pseudo-header and call checksum function.
 uint16_t
